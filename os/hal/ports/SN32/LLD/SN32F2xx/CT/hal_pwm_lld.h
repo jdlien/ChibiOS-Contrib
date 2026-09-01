@@ -63,6 +63,23 @@
 #if !defined(SN32_PWM_CT16B1_IRQ_PRIORITY) || defined(__DOXYGEN__)
 #define SN32_PWM_CT16B1_IRQ_PRIORITY         2
 #endif
+
+/**
+ * @brief   PWMD0 (CT16B0) / PWMD2 (CT16B2) enable switches + IRQ priorities.
+ * @note    Small SN32 timers used to widen the PWM channel count beyond CT16B1.
+ */
+#if !defined(SN32_PWM_USE_CT16B0) || defined(__DOXYGEN__)
+#define SN32_PWM_USE_CT16B0                  FALSE
+#endif
+#if !defined(SN32_PWM_CT16B0_IRQ_PRIORITY) || defined(__DOXYGEN__)
+#define SN32_PWM_CT16B0_IRQ_PRIORITY         2
+#endif
+#if !defined(SN32_PWM_USE_CT16B2) || defined(__DOXYGEN__)
+#define SN32_PWM_USE_CT16B2                  FALSE
+#endif
+#if !defined(SN32_PWM_CT16B2_IRQ_PRIORITY) || defined(__DOXYGEN__)
+#define SN32_PWM_CT16B2_IRQ_PRIORITY         2
+#endif
 /** @} */
 
 /*===========================================================================*/
@@ -73,7 +90,7 @@
 #error "CT16B1 not present in the selected device"
 #endif
 
-#if !SN32_PWM_USE_CT16B1
+#if !SN32_PWM_USE_CT16B0 && !SN32_PWM_USE_CT16B1 && !SN32_PWM_USE_CT16B2
 #error "PWM driver activated but no CT peripheral assigned"
 #endif
 
@@ -209,64 +226,130 @@ struct PWMDriver {
 /*===========================================================================*/
 /* Driver macros.                                                            */
 /*===========================================================================*/
+/* Per-timer accessor variants. The dispatchers below fan out to every enabled
+ * timer; only the one matching `timer` acts (the C compiler still type-checks all
+ * branches, which is fine because every SN32 CT16 struct shares the same
+ * config/match/pwm/irq sub-structs). Multi-timer support (CT16B0/B1/B2) is required
+ * for boards whose PWM axis exceeds one timer's channel count (e.g. SN32F290). */
+#if SN32_PWM_USE_CT16B0
+#define SN32_CT_PWM_SET_CT16B0(timer, field, value)       \
+  do { if ((timer) == &PWMD0) (SN32_CT16B0)->field = (value); } while (0)
+#else
+#define SN32_CT_PWM_SET_CT16B0(timer, field, value)  do { } while (0)
+#endif
 #if SN32_PWM_USE_CT16B1
 #define SN32_CT_PWM_SET_CT16B1(timer, field, value)       \
   do { if ((timer) == &PWMD1) (SN32_CT16B1)->field = (value); } while (0)
 #else
-#define SN32_CT_PWM_SET_CT16B1(timer, field, value)       \
-  do { } while (0)
+#define SN32_CT_PWM_SET_CT16B1(timer, field, value)  do { } while (0)
+#endif
+#if SN32_PWM_USE_CT16B2
+#define SN32_CT_PWM_SET_CT16B2(timer, field, value)       \
+  do { if ((timer) == &PWMD2) (SN32_CT16B2)->field = (value); } while (0)
+#else
+#define SN32_CT_PWM_SET_CT16B2(timer, field, value)  do { } while (0)
 #endif
 
 #define SN32_CT_PWM_SET(timer, field, value)        \
   do {                                               \
+    SN32_CT_PWM_SET_CT16B0(timer, field, value);     \
     SN32_CT_PWM_SET_CT16B1(timer, field, value);     \
+    SN32_CT_PWM_SET_CT16B2(timer, field, value);     \
   } while (0)
 
+#if SN32_PWM_USE_CT16B0
+#define SN32_CT_PWM_OR_CT16B0(timer, field, value)        \
+  do { if ((timer) == &PWMD0) (SN32_CT16B0)->field |= (value); } while (0)
+#else
+#define SN32_CT_PWM_OR_CT16B0(timer, field, value)  do { } while (0)
+#endif
 #if SN32_PWM_USE_CT16B1
 #define SN32_CT_PWM_OR_CT16B1(timer, field, value)        \
   do { if ((timer) == &PWMD1) (SN32_CT16B1)->field |= (value); } while (0)
 #else
-#define SN32_CT_PWM_OR_CT16B1(timer, field, value)        \
-  do { } while (0)
+#define SN32_CT_PWM_OR_CT16B1(timer, field, value)  do { } while (0)
+#endif
+#if SN32_PWM_USE_CT16B2
+#define SN32_CT_PWM_OR_CT16B2(timer, field, value)        \
+  do { if ((timer) == &PWMD2) (SN32_CT16B2)->field |= (value); } while (0)
+#else
+#define SN32_CT_PWM_OR_CT16B2(timer, field, value)  do { } while (0)
 #endif
 
 #define SN32_CT_PWM_OR(timer, field, value)         \
   do {                                              \
+    SN32_CT_PWM_OR_CT16B0(timer, field, value);     \
     SN32_CT_PWM_OR_CT16B1(timer, field, value);     \
+    SN32_CT_PWM_OR_CT16B2(timer, field, value);     \
   } while (0)
 
+#if SN32_PWM_USE_CT16B0
+#define SN32_CT_PWM_AND_CT16B0(timer, field, value)        \
+  do { if ((timer) == &PWMD0) (SN32_CT16B0)->field &= (value); } while (0)
+#else
+#define SN32_CT_PWM_AND_CT16B0(timer, field, value)  do { } while (0)
+#endif
 #if SN32_PWM_USE_CT16B1
 #define SN32_CT_PWM_AND_CT16B1(timer, field, value)        \
   do { if ((timer) == &PWMD1) (SN32_CT16B1)->field &= (value); } while (0)
 #else
-#define SN32_CT_PWM_AND_CT16B1(timer, field, value)        \
-  do { } while (0)
+#define SN32_CT_PWM_AND_CT16B1(timer, field, value)  do { } while (0)
+#endif
+#if SN32_PWM_USE_CT16B2
+#define SN32_CT_PWM_AND_CT16B2(timer, field, value)        \
+  do { if ((timer) == &PWMD2) (SN32_CT16B2)->field &= (value); } while (0)
+#else
+#define SN32_CT_PWM_AND_CT16B2(timer, field, value)  do { } while (0)
 #endif
 
 #define SN32_CT_PWM_AND(timer, field, value)         \
   do {                                              \
+    SN32_CT_PWM_AND_CT16B0(timer, field, value);     \
     SN32_CT_PWM_AND_CT16B1(timer, field, value);     \
+    SN32_CT_PWM_AND_CT16B2(timer, field, value);     \
   } while (0)
 
+#if SN32_PWM_USE_CT16B0
+#define SN32_CT_PWM_GET_CT16B0(timer, cmd) ((timer) == &PWMD0 ? (SN32_CT16B0)->cmd : 0)
+#else
+#define SN32_CT_PWM_GET_CT16B0(timer, cmd) (0)
+#endif
 #if SN32_PWM_USE_CT16B1
-#define SN32_CT_PWM_GET_CT16B1(timer, cmd) \
-  ((timer) == &PWMD1 ? (SN32_CT16B1)->cmd : 0)
+#define SN32_CT_PWM_GET_CT16B1(timer, cmd) ((timer) == &PWMD1 ? (SN32_CT16B1)->cmd : 0)
 #else
 #define SN32_CT_PWM_GET_CT16B1(timer, cmd) (0)
 #endif
+#if SN32_PWM_USE_CT16B2
+#define SN32_CT_PWM_GET_CT16B2(timer, cmd) ((timer) == &PWMD2 ? (SN32_CT16B2)->cmd : 0)
+#else
+#define SN32_CT_PWM_GET_CT16B2(timer, cmd) (0)
+#endif
 
+/* Only the matching timer contributes; the others yield 0. */
 #define SN32_CT_PWM_GET(timer, cmd) \
-  (SN32_CT_PWM_GET_CT16B1(timer, cmd))
+  (SN32_CT_PWM_GET_CT16B0(timer, cmd) + SN32_CT_PWM_GET_CT16B1(timer, cmd) + SN32_CT_PWM_GET_CT16B2(timer, cmd))
 
+#if SN32_PWM_USE_CT16B0
+#define SN32_CT_PWM_GET_ADDR_CT16B0(timer, cmd) ((timer) == &PWMD0 ? &(SN32_CT16B0)->cmd : NULL)
+#else
+#define SN32_CT_PWM_GET_ADDR_CT16B0(timer, cmd) (NULL)
+#endif
 #if SN32_PWM_USE_CT16B1
-#define SN32_CT_PWM_GET_ADDR_CT16B1(timer, cmd) \
-  ((timer) == &PWMD1 ? &(SN32_CT16B1)->cmd : NULL)
+#define SN32_CT_PWM_GET_ADDR_CT16B1(timer, cmd) ((timer) == &PWMD1 ? &(SN32_CT16B1)->cmd : NULL)
 #else
 #define SN32_CT_PWM_GET_ADDR_CT16B1(timer, cmd) (NULL)
 #endif
+#if SN32_PWM_USE_CT16B2
+#define SN32_CT_PWM_GET_ADDR_CT16B2(timer, cmd) ((timer) == &PWMD2 ? &(SN32_CT16B2)->cmd : NULL)
+#else
+#define SN32_CT_PWM_GET_ADDR_CT16B2(timer, cmd) (NULL)
+#endif
 
-#define SN32_CT_PWM_GET_ADDR(timer, cmd) \
-  (SN32_CT_PWM_GET_ADDR_CT16B1(timer, cmd))
+/* First non-NULL (i.e. the matching timer) wins. */
+#define SN32_CT_PWM_GET_ADDR(timer, cmd)                                          \
+  (SN32_CT_PWM_GET_ADDR_CT16B0(timer, cmd) != NULL ? SN32_CT_PWM_GET_ADDR_CT16B0(timer, cmd) : \
+   SN32_CT_PWM_GET_ADDR_CT16B1(timer, cmd) != NULL ? SN32_CT_PWM_GET_ADDR_CT16B1(timer, cmd) : \
+   SN32_CT_PWM_GET_ADDR_CT16B2(timer, cmd))
 
 /**
  * @brief   Changes the period of the PWM peripheral.
@@ -285,7 +368,7 @@ struct PWMDriver {
  * @notapi
  */
 #define pwm_lld_change_period(pwmp, period)                                 \
-  SN32_CT_PWM_SET((pwmp), MR[PWM_CHANNELS], ((period) - 1))
+  SN32_CT_PWM_SET((pwmp), MR[(pwmp)->channels], pwm_lld_mr_value((pwmp), ((period) - 1)))
 
 /**
  * @brief   Changes the timer counter of the PWM peripheral.
@@ -306,9 +389,37 @@ struct PWMDriver {
 /* External declarations.                                                    */
 /*===========================================================================*/
 
+#if SN32_PWM_USE_CT16B0 && !defined(__DOXYGEN__)
+extern PWMDriver PWMD0;
+#endif
 #if SN32_PWM_USE_CT16B1 && !defined(__DOXYGEN__)
 extern PWMDriver PWMD1;
 #endif
+#if SN32_PWM_USE_CT16B2 && !defined(__DOXYGEN__)
+extern PWMDriver PWMD2;
+#endif
+
+/**
+ * @brief   Returns the value to write into a match (MR) register.
+ * @details On SN32F280/F290 the match registers of every CT16 timer *except*
+ *          CT16B1 are write-protected and require the PWM key (0x5A in the top
+ *          byte) to accept a new value; CT16B1's MR registers are not protected.
+ *          On other devices no key is needed. Writing the key on the small
+ *          timers is what makes their period/duty updates actually take effect.
+ */
+static inline uint32_t pwm_lld_mr_value(const PWMDriver *pwmp, uint32_t value) {
+#if (defined(SN32F280) || defined(SN32F290))
+#if SN32_PWM_USE_CT16B1
+  if (pwmp == &PWMD1) {
+    return value;
+  }
+#endif
+  return CT16_PWM_UNLOCK(value);
+#else
+  (void)pwmp;
+  return value;
+#endif
+}
 
 #ifdef __cplusplus
 extern "C" {

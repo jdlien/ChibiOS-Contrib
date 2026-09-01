@@ -32,6 +32,7 @@
 /*===========================================================================*/
 #define SN32_TIM_CT16B0 0
 #define SN32_TIM_CT16B1 1
+#define SN32_TIM_CT16B5 5
 
 /*===========================================================================*/
 /* Driver pre-compile time settings.                                         */
@@ -90,6 +91,17 @@
 #endif
 
 #define SN32_ST_TIM                         SN32_CT16B1
+#define ST_LLD_NUM_ALARMS                   1
+
+#elif SN32_ST_USE_TIMER == SN32_TIM_CT16B5
+
+#if defined(SN32_CT16B5_IS_USED)
+#error "ST requires CT16B5 but the timer is already used"
+#else
+#define SN32_CT16B5_IS_USED
+#endif
+
+#define SN32_ST_TIM                         SN32_CT16B5
 #define ST_LLD_NUM_ALARMS                   1
 
 #else
@@ -199,7 +211,7 @@ static inline void st_lld_start_alarm(systime_t abstime) {
 
   /* Save the alarm time in a timer register.  This is needed only to make
    * st_lld_get_alarm() work. */
-#if ((defined(SN32F280) || defined(SN32F290)) && SN32_ST_USE_TIMER == SN32_TIM_CT16B0)
+#if ((defined(SN32F280) || defined(SN32F290)) && (SN32_ST_USE_TIMER == SN32_TIM_CT16B0 || SN32_ST_USE_TIMER == SN32_TIM_CT16B5))
   SN32_ST_TIM->MR[0] = CT16_PWM_UNLOCK(((uint32_t)abstime & SN32_CT16_TC_LIMIT));
 #else
   SN32_ST_TIM->MR[0] = ((uint32_t)abstime & SN32_CT16_TC_LIMIT);

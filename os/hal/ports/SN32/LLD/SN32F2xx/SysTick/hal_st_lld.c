@@ -57,6 +57,16 @@
 #define ST_RESET_CLOCK()                    sys1ResetCT16B1()
 #define ST_INIT_CLOCK()                     CT16B1_ResetTimer()
 
+#elif SN32_ST_USE_TIMER == SN32_TIM_CT16B5
+
+#if !SN32_HAS_CT16B5
+#error "CT16B5 not present in the selected device"
+#endif
+
+#define ST_ENABLE_CLOCK()                   sys1EnableCT16B5()
+#define ST_RESET_CLOCK()                    sys1ResetCT16B5()
+#define ST_INIT_CLOCK()                     CT16B5_ResetTimer()
+
 #else
 #error "SN32_ST_USE_TIMER specifies an unsupported timer"
 #endif
