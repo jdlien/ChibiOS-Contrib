@@ -206,6 +206,7 @@ extern "C" {
   void spiSN32FlashDmaPrepare(SPIDriver *lcd, SPIDriver *flash, uint32_t len);
   void spiSN32FlashDmaFire(SPIDriver *lcd, spi_sn32_dma_cb_t cb);
   bool spiSN32FlashDmaBusy(SPIDriver *lcd);
+  void spiSN32FlashDmaAbort(SPIDriver *lcd);
 #endif
   msg_t spi_lld_start(SPIDriver *spip);
   void spi_lld_stop(SPIDriver *spip);
