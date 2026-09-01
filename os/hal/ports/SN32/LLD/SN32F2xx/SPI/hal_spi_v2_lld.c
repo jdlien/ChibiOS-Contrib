@@ -124,6 +124,132 @@ static inline void spi_lld_irq_handler(SPIDriver *spip) {
 }
 
 /*===========================================================================*/
+/* SN32 SPI-to-SPI flash->LCD DMA extension.                                  */
+/*===========================================================================*/
+/* The SPI-to-SPI DMA registers live on SPI0 itself (DMACTRL/DMACNT/DMAHTCNT,
+ * completion via SPI0's DMATCIF/DMAHTIF). They are absent from the minimal
+ * sn32_spi.h view, so this uses the vendor SN_SPI0 map. Completion is dispatched
+ * from SN32_SPI0_HANDLER below -- no application-provided vector. */
+#if defined(SN32_SPI0_FLASH_DMA)
+
+static spi_sn32_dma_cb_t sn32_dma_cb;
+static volatile bool     sn32_dma_busy = false;
+/* The flash-source SPI instance borrowed for the DMA (SPI1). Held for Step 2,
+ * when SPID1 is spiStart()ed and we must keep its driver handler from running
+ * during the transfer.
+ *
+ * IMPORTANT: do NOT mask the source's RXFIFOTHIE to do that -- on the SN32 the
+ * RX-threshold event that RXFIFOTHIE enables is ALSO what triggers the SPI1->SPI0
+ * DMA request. Clearing it stalls the DMA (it never fires, never completes, and
+ * SPI0 is left in DMA mode -> the next spiSend hangs). The correct isolation,
+ * once SPID1 is live, is nvicDisableVector(SN32_SPI1_NUMBER) for the DMA window
+ * (keeps the threshold event -> keeps the DMA trigger, just skips the handler),
+ * re-enabled on completion. Until SPID1 is started its vector is already off,
+ * so this instance is currently only recorded, not touched. */
+static SPIDriver        *sn32_dma_flash = NULL;
+
+/* SPI0 in DMA-ready config: 8-bit words (command phase), mode 0, 24 MHz, data
+ * fetch delay, re-latched by FRESET. Matches the hand-tuned bare-metal setup. */
+static void sn32_flash_dma_config(void) {
+  /* QP's spiStop() gates the SPI0 clock between flushes; re-enable it. */
+  sys1EnableSPI0();
+  /* Wipe the driver's leftover CTRL0/CTRL1 (spiStop does not clear them) so no
+     stale DL/threshold/MDIV bits survive into the DMA config. */
+  SN_SPI0->CTRL0 = 0;
+  SN_SPI0->CTRL1 = 0;
+  SN_SPI0->CTRL0_b.MS     = 0;
+  SN_SPI0->CTRL0_b.SDODIS = 0;
+  SN_SPI0->CTRL0_b.DL     = 7;       /* 8-bit */
+  SN_SPI0->CTRL0_b.SELDIS = 1;
+  SN_SPI0->CTRL1_b.MLSB   = 0;
+  SN_SPI0->CTRL1_b.CPOL   = 0;       /* mode 0 */
+  SN_SPI0->CTRL1_b.CPHA   = 0;
+  SN_SPI0->CLKDIV_b.DIV   = 0;       /* 24 MHz */
+  SN_SPI0->DFDLY_b.DFETCH_EN = 1;
+  SN_SPI0->CTRL0_b.FRESET = 0b11;
+  SN_SPI0->CTRL0_b.SPIEN  = 1;
+}
+
+void spiSN32FlashDmaPrepare(SPIDriver *lcd, SPIDriver *flash, uint32_t len) {
+  (void)lcd;
+  /* Borrow the source instance for the DMA window. Do NOT touch its RXFIFOTHIE:
+     that bit gates the SPI1 RX-threshold event that triggers the DMA request, so
+     clearing it would stall the transfer. Instead disable its NVIC vector -- the
+     threshold event (and thus the DMA trigger) stays live, but the driver's
+     SN32_SPI1_HANDLER won't dispatch and race the DMA draining the RX FIFO. The
+     command phase (raw READ+addr the caller clocks next) also relies on the
+     vector being off. Re-enabled in sn32_flash_dma_isr() on completion. */
+  sn32_dma_flash = flash;
+#if SN32_SPI_USE_SPI1 == TRUE
+  if (flash == &SPID1) {
+    nvicDisableVector(SN32_SPI1_NUMBER);
+  }
+#endif
+  sn32_flash_dma_config();
+  SN_SPI0->CTRL0_b.FRESET = 0b11;
+  SN_SPI0->DMACTRL_b.DMAEN = 0;
+  SN_SPI0->DMACTRL_b.DIR   = 0;              /* SPI1(flash) -> SPI0(LCD) */
+  SN_SPI0->DMACNT_b.CNT    = len - 1;
+  SN_SPI0->DMAHTCNT_b.HTCNT = (len - 1) / 2;
+  /* SPI0 stays 8-bit here so the caller can send the panel window + flash
+     READ+addr command before the pixel stream starts. */
+}
+
+void spiSN32FlashDmaFire(SPIDriver *lcd, spi_sn32_dma_cb_t cb) {
+  (void)lcd;
+  sn32_dma_cb   = cb;
+  sn32_dma_busy = true;
+  SN_SPI0->IC = 0x3F;
+  SN_SPI0->CTRL0_b.DL = 0xF;                 /* 16-bit words (one RGB565 pixel) */
+  SN_SPI0->IE = (1u << 5) | (1u << 4);       /* DMATCIE | DMAHTIE */
+  nvicClearPending(SN32_SPI0_NUMBER);
+  nvicEnableVector(SN32_SPI0_NUMBER, SN32_SPI_SPI0_IRQ_PRIORITY);
+  SN_SPI0->DMACTRL_b.DMAEN = 1;              /* completion -> SN32_SPI0_HANDLER */
+}
+
+bool spiSN32FlashDmaBusy(SPIDriver *lcd) {
+  (void)lcd;
+  return sn32_dma_busy;
+}
+
+/* Dispatched from the SPI0 handler when a DMA flag is pending. Returns true if
+ * it consumed the interrupt (so the FIFO handler is skipped). */
+static bool sn32_flash_dma_isr(void) {
+  uint32_t ris = SN_SPI0->RIS;
+  SN_SPI0->IC = 0x3F;
+  if (ris & (1u << 5)) {                     /* DMATCIF: transfer complete */
+    /* Let the last word finish shifting out before tearing down. */
+    for (uint32_t g = 0; g < 200000u &&
+         (!SN_SPI0->STAT_b.TX_EMPTY || SN_SPI0->STAT_b.BUSY); g++) { }
+    SN_SPI0->DMACTRL_b.DMAEN = 0;
+    SN_SPI0->CTRL0_b.DL = 7;                 /* back to 8-bit */
+    /* Hand SPI0 back to the driver's FIFO mode: the DMA arm left the RX-threshold
+       IRQ disabled (IE = DMA bits), so a subsequent spiSend would never complete.
+       QP-driven callers re-run spiStart per flush and don't need this; callers
+       that drive the driver directly between DMAs (e.g. a bare-metal dashboard)
+       do. Restoring the driver's IE here is harmless for the former. */
+    SN_SPI0->CTRL0_b.RXFIFOTH = 0;
+    SN_SPI0->IE = 0b0100;                    /* RXFIFOTHIE */
+#if SN32_SPI_USE_SPI1 == TRUE
+    if (sn32_dma_flash == &SPID1) {
+      /* Flush any stale RX + pending flag so handing the vector back doesn't
+         spuriously dispatch the idle driver handler, then re-enable it. */
+      SN_SPI1->CTRL0_b.FRESET = 0b11;
+      SN_SPI1->IC = 0x3F;
+      nvicClearPending(SN32_SPI1_NUMBER);
+      nvicEnableVector(SN32_SPI1_NUMBER, SN32_SPI_SPI1_IRQ_PRIORITY);
+    }
+#endif
+    sn32_dma_flash = NULL;
+    sn32_dma_busy = false;
+    if (sn32_dma_cb) sn32_dma_cb();          /* caller drops flash/panel CS */
+  }
+  return true;                               /* DMAHTIF: consumed, nothing to do */
+}
+
+#endif /* SN32_SPI0_FLASH_DMA */
+
+/*===========================================================================*/
 /* Driver interrupt handlers.                                                */
 /*===========================================================================*/
 
@@ -131,7 +257,11 @@ static inline void spi_lld_irq_handler(SPIDriver *spip) {
 OSAL_IRQ_HANDLER(SN32_SPI0_HANDLER) {
   OSAL_IRQ_PROLOGUE();
 
-  spi_lld_irq_handler(&SPID0);
+#if defined(SN32_SPI0_FLASH_DMA)
+  /* Service a pending flash->LCD DMA completion; else fall through to FIFO. */
+  if (!((SPID0.spi->RIS & 0x30U) && sn32_flash_dma_isr()))  /* DMAHTIF|DMATCIF */
+#endif
+    spi_lld_irq_handler(&SPID0);
 
   OSAL_IRQ_EPILOGUE();
 }

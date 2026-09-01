@@ -180,10 +180,33 @@ extern SPIDriver SPID0;
 extern SPIDriver SPID1;
 #endif
 
+#if defined(SN32_SPI0_FLASH_DMA) || defined(__DOXYGEN__)
+/* SN32-specific SPI-to-SPI flash->LCD DMA extension.
+ *
+ * The SN32 "DMA" is the EBI SPI1(RX)->SPI0(TX) engine: peripheral-to-peripheral,
+ * no RAM source, so it does not fit the standard hal_spi buffer API. This extra
+ * entrypoint lets an application stream flash-resident pixels straight to the
+ * panel while still using this driver for normal (CPU/FIFO) SPI0 transfers.
+ *
+ * Usage (SPI0 = the LCD sink):
+ *   spiSN32FlashDmaPrepare(&SPID0, &SPID1, len); // SPI0 sink + SPI1 source borrowed
+ *   ...caller sets the panel window and clocks the flash READ+addr on SPI1...
+ *   spiSN32FlashDmaFire(&SPID0, cb);       // flip to 16-bit words, arm; non-blocking
+ * `cb` runs in the SPI0 ISR at transfer-complete, after the bus drains and the
+ * DMA/16-bit mode are torn down; use it to deassert the flash/panel CS lines.
+ * Completion is dispatched by this driver's SPI0 handler (no app-side vector). */
+typedef void (*spi_sn32_dma_cb_t)(void);
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
   void spi_lld_init(void);
+#if defined(SN32_SPI0_FLASH_DMA)
+  void spiSN32FlashDmaPrepare(SPIDriver *lcd, SPIDriver *flash, uint32_t len);
+  void spiSN32FlashDmaFire(SPIDriver *lcd, spi_sn32_dma_cb_t cb);
+  bool spiSN32FlashDmaBusy(SPIDriver *lcd);
+#endif
   msg_t spi_lld_start(SPIDriver *spip);
   void spi_lld_stop(SPIDriver *spip);
 #if (SPI_SELECT_MODE == SPI_SELECT_MODE_LLD) || defined(__DOXYGEN__)
