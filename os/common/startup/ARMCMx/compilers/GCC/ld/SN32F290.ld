@@ -27,14 +27,21 @@ MEMORY
     flash5 (rx) : org = 0x00000000, len = 0
     flash6 (rx) : org = 0x00000000, len = 0
     flash7 (rx) : org = 0x00000000, len = 0
-    ram0   (wx) : org = 0x20000000, len = 32k
+    /* The top 16 bytes of SRAM are carved out as ram7: a reset-retained,
+       never-initialised scratch region (ChibiOS's bare .ram7 section is
+       NOLOAD and not zeroed by crt0). The AK820 Pro watchdog keeps its
+       consecutive-reset accounting there; previously such state sat in
+       unreserved heap tail, which nothing protected from malloc. Note this
+       moves __ram0_end__ down by 16, and the DFU magic (sn32_dfu.c) moves
+       with it consistently -- both its writer and its reader use the symbol. */
+    ram0   (wx) : org = 0x20000000, len = 32k - 16
     ram1   (wx) : org = 0x00000000, len = 0
     ram2   (wx) : org = 0x00000000, len = 0
     ram3   (wx) : org = 0x00000000, len = 0
     ram4   (wx) : org = 0x00000000, len = 0
     ram5   (wx) : org = 0x00000000, len = 0
     ram6   (wx) : org = 0x00000000, len = 0
-    ram7   (wx) : org = 0x00000000, len = 0
+    ram7   (wx) : org = 0x20007FF0, len = 16
 }
 
 /* For each data/text section two region are defined, a virtual region
