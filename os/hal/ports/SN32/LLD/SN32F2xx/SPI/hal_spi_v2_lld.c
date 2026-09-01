@@ -56,11 +56,19 @@ SPIDriver SPID1;
 /* Driver local functions.                                                   */
 /*===========================================================================*/
 
+/* SN32 SPI TX/RX FIFO depth (words). Both FIFOs are 8 entries deep. */
+#define SN32_SPI_FIFO_DEPTH 8U
+
 static void spi_lld_configure(SPIDriver *spip) {
   spip->spi->CTRL0 = spip->config->ctrl0;
   spip->spi->CTRL0_b.SELDIS = SPI_SELECT_MODE != SPI_SELECT_MODE_LLD;
   spip->spi->CTRL0_b.MS = spip->config->slave;
   spip->spi->CTRL0_b.SDODIS = false;
+  /* Fire the RX threshold IRQ as soon as one word is available. The handler
+     drains the whole FIFO per call, so a low threshold still yields few IRQs
+     under load (bytes accumulate during IRQ latency) while guaranteeing the
+     final short batch is always delivered -- no RX-timeout tail handling. */
+  spip->spi->CTRL0_b.RXFIFOTH = 0;
 
   spip->spi->CTRL1 = (uint32_t)spip->config->ctrl1;
 
@@ -80,19 +88,37 @@ static void spi_lld_configure(SPIDriver *spip) {
   spip->spi->CTRL0_b.SPIEN = true;
 }
 
+/* Top up the TX FIFO. Bytes are pushed while data remains, the TX FIFO has
+   room, and no more than a FIFO's worth are outstanding (txidx - rxidx) -- the
+   latter caps RX fill so it can never overflow, which would drop words and
+   stall the rxidx==count completion test. Priming the FIFO (vs one byte per
+   IRQ) keeps SCLK continuously clocked; that idle-gap removal is the main win. */
+static inline void spi_fifo_fill(SPIDriver *spip) {
+  while (spip->txidx < spip->count &&
+         (spip->txidx - spip->rxidx) < SN32_SPI_FIFO_DEPTH &&
+         !spip->spi->STAT_b.TX_FULL) {
+    spip->spi->DATA = spip->txbuf ? spip->txbuf[spip->txidx] : 0x00;
+    spip->txidx++;
+  }
+}
+
 static inline void spi_lld_irq_handler(SPIDriver *spip) {
-  if (spip->spi->RIS_b.RXFIFOTHIF) {
-    chSysLockFromISR();
-    uint16_t data = spip->spi->DATA;
+  if (spip->spi->RIS_b.RXFIFOTHIF || !spip->spi->STAT_b.RX_EMPTY) {
+    /* Drain every word the RX FIFO accumulated since the last interrupt. */
+    while (!spip->spi->STAT_b.RX_EMPTY) {
+      uint16_t data = spip->spi->DATA;
+      if (spip->rxbuf && spip->rxidx < spip->count) {
+        spip->rxbuf[spip->rxidx] = data;
+      }
+      spip->rxidx++;
+    }
     spip->spi->IC_b.RXFIFOTHIC = true;
-    chSysUnlockFromISR();
 
-    if (spip->rxbuf) spip->rxbuf[spip->idx] = data;
-
-    if (++(spip->idx) >= spip->count) {
+    if (spip->rxidx >= spip->count) {
       __spi_isr_complete_code(spip);
     } else {
-      spip->spi->DATA = spip->txbuf ? spip->txbuf[spip->idx] : 0x00;
+      /* Keep the pipeline full for the remainder of the transfer. */
+      spi_fifo_fill(spip);
     }
   }
 }
@@ -290,9 +316,12 @@ msg_t spi_lld_exchange(SPIDriver *spip, size_t n,
   spip->txbuf = txbuf;
   spip->rxbuf = rxbuf;
   spip->count = n;
-  spip->idx = 0;
+  spip->rxidx = 0;
+  spip->txidx = 0;
 
-  spip->spi->DATA = spip->txbuf ? spip->txbuf[0] : 0x00;
+  /* Prime the TX FIFO so SCLK runs continuously; the RX threshold IRQ then
+     drains completed words and refills. */
+  spi_fifo_fill(spip);
 
   return HAL_RET_SUCCESS;
 }
@@ -348,7 +377,7 @@ msg_t spi_lld_stop_transfer(SPIDriver *spip, size_t *sizep) {
   SPI_FIFO_FRESET(spip);
 
   if (sizep != NULL) {
-    *sizep = spip->count - spip->idx;
+    *sizep = spip->count - spip->rxidx;
   }
 
   return HAL_RET_SUCCESS;
