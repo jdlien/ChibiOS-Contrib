@@ -741,9 +741,12 @@ void usb_lld_start_in(USBDriver *usbp, usbep_t ep)
         n = (size_t)usbp->epc[ep]->in_maxsize;
 
     isp->txlast = n;
-    osalSysLockFromISR();
+    /* No lock here: this is reached only through usbStartTransmitI(), an
+     * I-class call made under the caller's lock or from the USB ISR. The
+     * lock/unlock pair that was here re-enabled interrupts inside a thread
+     * caller's critical section (obqFlush -> obnotify -> usbStartTransmitI)
+     * on ARMv6-M, so the endpoint was armed below with interrupts on. */
     sn32_usb_write_fifo(ep, isp->txbuf, n, false);
-    osalSysUnlockFromISR();
 
     EPCTL_SET_STAT_ACK(ep, n);
 
