@@ -311,7 +311,6 @@ static void serve_interrupt(SerialDriver *sdp) {
           break;
       }
           u->TH = b;
-          osalSysUnlockFromISR();
           ls = u->LS;
       }
     }
@@ -328,16 +327,20 @@ static void serve_interrupt(SerialDriver *sdp) {
   }
 }
 
+/* Called ONLY as the output queue's notify callback, and the queue code calls
+ * that with the system already locked (oqPutTimeout, oqWriteTimeout). So no
+ * locking here. It used to lock and unlock around oqGetI(), and on ARMv6-M
+ * that unlock re-enabled interrupts inside the caller's critical section: a
+ * THRE interrupt left pending by the lock could then run between taking byte
+ * N off the queue and writing it to TH, pull byte N+1 and write it FIRST --
+ * two bytes of a frame swapped on the wire. The IE read-modify-write below
+ * also raced the ISR's own IE updates. */
 static void load(SerialDriver *sdp) {
   sn32_uart_t *u = sdp->uart;
   if (u->LS & UART_LineStatus_THRE) {
-    osalSysLock();
     msg_t b = oqGetI(&sdp->oqueue);
-    osalSysUnlock();
     if (b < MSG_OK) {
-      osalSysLock();
       chnAddFlagsI(sdp, CHN_OUTPUT_EMPTY);
-      osalSysUnlock();
       return;
     }
     u->TH = b;
