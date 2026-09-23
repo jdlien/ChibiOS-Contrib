@@ -112,7 +112,11 @@ static inline void spi_lld_irq_handler(SPIDriver *spip) {
       }
       spip->rxidx++;
     }
-    spip->spi->IC_b.RXFIFOTHIC = true;
+    /* A literal write, not IC_b.RXFIFOTHIC = true: IC is write-1-to-clear and
+       the bitfield form compiles to a read-modify-write that writes back every
+       bit the (write-only) register happens to read as -- which can include
+       the DMA flags. */
+    spip->spi->IC = 1u << 2;                 /* RXFIFOTHIC */
 
     if (spip->rxidx >= spip->count) {
       __spi_isr_complete_code(spip);
@@ -134,6 +138,9 @@ static inline void spi_lld_irq_handler(SPIDriver *spip) {
 
 static spi_sn32_dma_cb_t sn32_dma_cb;
 static volatile bool     sn32_dma_busy = false;
+/* Completions found by sn32_flash_dma_isr()'s re-check rather than by the
+ * flag it read -- see there. A count, for the board's diagnostics. */
+static volatile uint32_t sn32_dma_rescues = 0;
 /* The flash-source SPI instance borrowed for the DMA (SPI1). Held for Step 2,
  * when SPID1 is spiStart()ed and we must keep its driver handler from running
  * during the transfer.
@@ -212,6 +219,10 @@ bool spiSN32FlashDmaBusy(SPIDriver *lcd) {
   return sn32_dma_busy;
 }
 
+uint32_t spiSN32FlashDmaRescues(void) {
+  return sn32_dma_rescues;
+}
+
 /* Abort an in-flight flash->LCD DMA and put BOTH controllers back exactly where
  * a normal completion would leave them.
  *
@@ -252,10 +263,33 @@ void spiSN32FlashDmaAbort(SPIDriver *lcd) {
 }
 
 /* Dispatched from the SPI0 handler when a DMA flag is pending. Returns true if
- * it consumed the interrupt (so the FIFO handler is skipped). */
+ * it consumed the interrupt (so the FIFO handler is skipped).
+ *
+ * THE LOST COMPLETION (found 2026-09-23). This used to read RIS and then write
+ * IC = 0x3F. A DMATCIF raised between those two instructions was wiped unseen:
+ * the engine had finished (CURCNT full, DMAEN cleared by the hardware) but no
+ * flag remained and blit_done_cb never ran, so the blit timed out as "never
+ * started" and was drawn again. Clearing only the bits read is not enough on
+ * its own: with that alone (the reverted 2a17a73b48) the late DMATCIF stayed
+ * in RIS yet raised no further interrupt -- the IC write evidently drops the
+ * pending request too -- and the blit waited out its full two-second bound.
+ * So: clear only what was read, then decide completion from the engine as
+ * well as from the flag.
+ *
+ * Why only 660-byte transfers (the clock face) ever lost it: the arm happens
+ * between LED row ISRs, which share SPI0's priority (3) and run ~188 us, so
+ * the half-transfer handler runs when the next row ISR ends, 188-258 us after
+ * the arm. A 660-byte transfer completes 220 us after the arm, inside that
+ * span; every other size completes well before or well after it. */
 static bool sn32_flash_dma_isr(void) {
-  uint32_t ris = SN_SPI0->RIS;
-  SN_SPI0->IC = 0x3F;
+  uint32_t ris = SN_SPI0->RIS & 0x30U;       /* DMATCIF | DMAHTIF */
+  SN_SPI0->IC = ris;
+  if (!(ris & (1u << 5)) && sn32_dma_busy &&
+      ((SN_SPI0->RIS & (1u << 5)) || !SN_SPI0->DMACTRL_b.DMAEN)) {
+    SN_SPI0->IC = 1u << 5;                   /* the completion that raced us */
+    ris |= 1u << 5;
+    sn32_dma_rescues++;
+  }
   if (ris & (1u << 5)) {                     /* DMATCIF: transfer complete */
     /* Let the last word finish shifting out before tearing down. */
     for (uint32_t g = 0; g < 200000u &&
@@ -281,7 +315,11 @@ static bool sn32_flash_dma_isr(void) {
 #endif
     sn32_dma_flash = NULL;
     sn32_dma_busy = false;
-    if (sn32_dma_cb) sn32_dma_cb();          /* caller drops flash/panel CS */
+    /* One call per arm: a stale DMATCIF outside a transfer must not re-run
+       the last blit's callback (it drops both chip-selects). */
+    spi_sn32_dma_cb_t cb = sn32_dma_cb;
+    sn32_dma_cb = NULL;
+    if (cb) cb();                            /* caller drops flash/panel CS */
   }
   return true;                               /* DMAHTIF: consumed, nothing to do */
 }
