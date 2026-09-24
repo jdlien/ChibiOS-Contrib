@@ -255,6 +255,13 @@ static void set_error(SerialDriver *sdp, uint8_t ls) {
     sts |= SD_PARITY_ERROR;
   if (ls & UART_LineStatus_FE)
     sts |= SD_FRAMING_ERROR;
+  /* Hardware overrun: a byte arrived with the receive FIFO full and was lost.
+     It was neither in UART_LS_STATUS nor reported here, so a byte the ISR
+     was too late for vanished silently. Reported the ChibiOS way, as
+     SD_OVERRUN_ERROR -- the flag this driver already raises when its input
+     queue is full. */
+  if (ls & UART_LineStatus_OE)
+    sts |= SD_OVERRUN_ERROR;
 
   osalSysLockFromISR();
   chnAddFlagsI(sdp, sts);
@@ -267,7 +274,7 @@ static void set_error(SerialDriver *sdp, uint8_t ls) {
  * @param[in] sdp       communication channel associated to the UART
  */
 static void serve_interrupt(SerialDriver *sdp) {
-  #define UART_LS_STATUS (UART_LineStatus_PE | UART_LineStatus_FE | UART_LineStatus_BI | UART_LineStatus_RxError)
+  #define UART_LS_STATUS (UART_LineStatus_OE | UART_LineStatus_PE | UART_LineStatus_FE | UART_LineStatus_BI | UART_LineStatus_RxError)
   sn32_uart_t *u = sdp->uart;
   uint32_t ii=u->II;
 
