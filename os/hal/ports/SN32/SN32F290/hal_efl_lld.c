@@ -307,17 +307,19 @@ SN32_EFL_RAMFUNC flash_error_t efl_lld_program(void *instance, flash_offset_t of
             memcpy(&word0, pp + i, remaining);
         }
 
-        // Skip if both words already match erased state
+        /* Refuse to program over a line that is not erased. This used to erase
+         * the WHOLE sector here and carry on, silently destroying every other
+         * line in it. Nothing reaches this on the AK820 Pro: QMK's wear
+         * levelling writes whole lines (BACKING_STORE_WRITE_SIZE ==
+         * SN32_FLASH_LINE_SIZE), appends only to lines that read erased, and
+         * erases before it consolidates (checked 2026-09-23, codex review
+         * finding 15). So the branch is dead -- and if a future caller ever
+         * reaches it, a failed write is recoverable where a wiped sector is
+         * not. */
         if ((existing_word0 != erased_val) || (existing_word1 != erased_val)) {
-            flash_sector_t sector = (abs_offset) / efl_lld_descriptor.sectors_size;
-            err = efl_lld_start_erase_sector(instance, sector);
-            devp->state = FLASH_READY;
-            if (err != FLASH_NO_ERROR) return err;
-
-            // Restore programming mode and address
-            devp->state = FLASH_PGM;
             sn32_flash_clear_status(devp);
-            sn32_flash_enable_pgm(devp);
+            devp->state = FLASH_READY;
+            return FLASH_ERROR_PROGRAM;
         }
 
         // Set address
