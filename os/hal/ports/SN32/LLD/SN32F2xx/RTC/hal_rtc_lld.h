@@ -139,6 +139,7 @@ extern "C" {
   void rtc_lld_set_callback(RTCDriver *rtcp, rtccb_t callback);
   void rtc_lld_set_period(RTCDriver *rtcp, uint32_t period);
   uint32_t rtc_lld_get_period(RTCDriver *rtcp);
+  void rtc_lld_add_secondsI(RTCDriver *rtcp, uint32_t seconds);
 #ifdef __cplusplus
 }
 #endif

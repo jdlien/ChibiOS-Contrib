@@ -193,6 +193,22 @@ void rtc_lld_set_time(RTCDriver *rtcp, const RTCDateTime *timespec) {
 }
 
 /**
+ * @brief   Advance the time by whole seconds.
+ * @note    For a sleeper that cleared second interrupts without serving them
+ *          (the hardware counter ran on, so the fraction is intact): it hands
+ *          the seconds back here. No lock taken: call with interrupts locked,
+ *          so no second interrupt can land between this and the caller's own
+ *          count.
+ *
+ * @iclass
+ */
+void rtc_lld_add_secondsI(RTCDriver *rtcp, uint32_t seconds) {
+
+  (void)rtcp;
+  rtc_time += (time_t)seconds;
+}
+
+/**
  * @brief   Get current time.
  * @note    The function can be called from any context.
  *
