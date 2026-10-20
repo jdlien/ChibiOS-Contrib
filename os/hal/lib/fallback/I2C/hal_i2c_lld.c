@@ -47,6 +47,25 @@
     }
 #endif
 
+/* A board may release the system lock between bytes (SW_I2C_BYTE_PREEMPT,
+   in its halconf.h): HAL holds it for the whole transaction, and with the
+   busy-wait delay (SW_I2C_USE_OSAL_DELAY FALSE) that masks every interrupt
+   for the whole transfer, a few ms on a slow bus -- longer than a UART's
+   FIFO lasts. SW_I2C_BYTE_PREEMPT_ENABLED() lets it decide at run time, and
+   SW_I2C_MASK_BEGIN()/END() bracket each stretch run with the lock held. */
+#if !defined(SW_I2C_BYTE_PREEMPT)
+#  define SW_I2C_BYTE_PREEMPT FALSE
+#endif
+#if !defined(SW_I2C_BYTE_PREEMPT_ENABLED)
+#  define SW_I2C_BYTE_PREEMPT_ENABLED() TRUE
+#endif
+#if !defined(SW_I2C_MASK_BEGIN)
+#  define SW_I2C_MASK_BEGIN() do { } while (0)
+#endif
+#if !defined(SW_I2C_MASK_END)
+#  define SW_I2C_MASK_END() do { } while (0)
+#endif
+
 /*===========================================================================*/
 /* Driver constants.                                                         */
 /*===========================================================================*/
@@ -150,7 +169,7 @@ static msg_t i2c_write_restart(I2CDriver *i2cp) {
   CHECK_ERROR(i2c_wait_clock(i2cp));
 
   i2c_delay(i2cp);
-  i2c_write_start(i2cp);
+  CHECK_ERROR(i2c_write_start(i2cp));
 
   return MSG_OK;
 }
@@ -228,9 +247,26 @@ static msg_t i2c_read_bit(I2CDriver *i2cp) {
   return bit;
 }
 
+/* At the start of each byte. SCL is low here: START, every data bit and
+   every ACK/NACK end with it low, and I2C has no minimum clock rate, so the
+   slave waits. A restart and a STOP each stay inside one locked stretch, and
+   so does every pin-mode write (they are read-modify-writes of the port's
+   mode register, shared with other pins). */
+static inline void i2c_byte_boundary(void) {
+#if SW_I2C_BYTE_PREEMPT == TRUE
+  if (SW_I2C_BYTE_PREEMPT_ENABLED()) {
+    SW_I2C_MASK_END();
+    osalSysUnlock();
+    osalSysLock();
+    SW_I2C_MASK_BEGIN();
+  }
+#endif
+}
+
 static msg_t i2c_write_byte(I2CDriver *i2cp, uint8_t byte) {
   msg_t msg;
 
+  i2c_byte_boundary();
   CHECK_ERROR(i2c_check_timeout(i2cp));
 
 #if (SW_I2C_USE_OPENDRAIN == TRUE) || defined(__DOXYGEN__)
@@ -260,6 +296,7 @@ static msg_t i2c_read_byte(I2CDriver *i2cp, unsigned nack) {
   msg_t byte;
   unsigned i;
 
+  i2c_byte_boundary();
   CHECK_ERROR(i2c_check_timeout(i2cp));
 
   byte = 0U;
@@ -392,9 +429,9 @@ void i2c_lld_stop(I2CDriver *i2cp) {
  *
  * @notapi
  */
-msg_t i2c_lld_master_receive_timeout(I2CDriver *i2cp, i2caddr_t addr,
-                                     uint8_t *rxbuf, size_t rxbytes,
-                                     sysinterval_t timeout) {
+static msg_t master_receive(I2CDriver *i2cp, i2caddr_t addr,
+                            uint8_t *rxbuf, size_t rxbytes,
+                            sysinterval_t timeout) {
 
   /* Setting timeout fields.*/
   i2cp->start = osalOsGetSystemTimeX();
@@ -443,10 +480,10 @@ msg_t i2c_lld_master_receive_timeout(I2CDriver *i2cp, i2caddr_t addr,
  *
  * @notapi
  */
-msg_t i2c_lld_master_transmit_timeout(I2CDriver *i2cp, i2caddr_t addr,
-                                      const uint8_t *txbuf, size_t txbytes,
-                                      uint8_t *rxbuf, size_t rxbytes,
-                                      sysinterval_t timeout) {
+static msg_t master_transmit(I2CDriver *i2cp, i2caddr_t addr,
+                             const uint8_t *txbuf, size_t txbytes,
+                             uint8_t *rxbuf, size_t rxbytes,
+                             sysinterval_t timeout) {
 
   /* Setting timeout fields.*/
   i2cp->start = osalOsGetSystemTimeX();
@@ -482,6 +519,29 @@ msg_t i2c_lld_master_transmit_timeout(I2CDriver *i2cp, i2caddr_t addr,
   }
 
   return i2c_write_stop(i2cp);
+}
+
+msg_t i2c_lld_master_receive_timeout(I2CDriver *i2cp, i2caddr_t addr,
+                                     uint8_t *rxbuf, size_t rxbytes,
+                                     sysinterval_t timeout) {
+  msg_t msg;
+
+  SW_I2C_MASK_BEGIN();
+  msg = master_receive(i2cp, addr, rxbuf, rxbytes, timeout);
+  SW_I2C_MASK_END();
+  return msg;
+}
+
+msg_t i2c_lld_master_transmit_timeout(I2CDriver *i2cp, i2caddr_t addr,
+                                      const uint8_t *txbuf, size_t txbytes,
+                                      uint8_t *rxbuf, size_t rxbytes,
+                                      sysinterval_t timeout) {
+  msg_t msg;
+
+  SW_I2C_MASK_BEGIN();
+  msg = master_transmit(i2cp, addr, txbuf, txbytes, rxbuf, rxbytes, timeout);
+  SW_I2C_MASK_END();
+  return msg;
 }
 
 #endif /* HAL_USE_I2C */

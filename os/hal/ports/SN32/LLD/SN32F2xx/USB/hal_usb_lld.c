@@ -420,10 +420,20 @@ void usb_serve_endpoints(USBDriver* usbp, usbep_t ep, bool in) {
  *
  * @isr
  */
+/* Diagnostic hooks a board may define: the handler's entry and exit. */
+#if !defined(SN32_USB_IRQ_ENTER_HOOK)
+#define SN32_USB_IRQ_ENTER_HOOK() do { } while (0)
+#endif
+#if !defined(SN32_USB_IRQ_EXIT_HOOK)
+#define SN32_USB_IRQ_EXIT_HOOK() do { } while (0)
+#endif
+
 OSAL_IRQ_HANDLER(SN32_USB_HANDLER) {
 
     OSAL_IRQ_PROLOGUE();
+    SN32_USB_IRQ_ENTER_HOOK();
     usb_lld_serve_interrupt(&USBD1);
+    SN32_USB_IRQ_EXIT_HOOK();
     OSAL_IRQ_EPILOGUE();
 }
 #endif /* SN32_USB_USE_USB1 == TRUE */

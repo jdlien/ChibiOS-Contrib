@@ -117,10 +117,20 @@
 /* Driver interrupt handlers.                                                */
 /*===========================================================================*/
 
+/* Diagnostic hooks a board may define: the handler's entry and exit. */
+#if !defined(SN32_ST_IRQ_ENTER_HOOK)
+#define SN32_ST_IRQ_ENTER_HOOK() do { } while (0)
+#endif
+#if !defined(SN32_ST_IRQ_EXIT_HOOK)
+#define SN32_ST_IRQ_EXIT_HOOK() do { } while (0)
+#endif
+
 OSAL_IRQ_HANDLER(ST_HANDLER) {
 
   OSAL_IRQ_PROLOGUE();
+  SN32_ST_IRQ_ENTER_HOOK();
   st_lld_serve_interrupt();
+  SN32_ST_IRQ_EXIT_HOOK();
   OSAL_IRQ_EPILOGUE();
 }
 

@@ -273,6 +273,19 @@ static void set_error(SerialDriver *sdp, uint8_t ls) {
  *
  * @param[in] sdp       communication channel associated to the UART
  */
+/* Diagnostic hooks a board may define (its halconf.h or mcuconf.h); both run
+   in the ISR and change nothing here. SN32_SERIAL_OE_HOOK sees each snapshot
+   of LS with OE set, the drain's re-reads included (in_drain), which report
+   no flag; SN32_SERIAL_RXDROP_HOOK, each byte the input queue refused. Both
+   of those raise the same SD_OVERRUN_ERROR, or none, so only these tell them
+   apart. */
+#if !defined(SN32_SERIAL_OE_HOOK)
+#define SN32_SERIAL_OE_HOOK(sdp, in_drain) do { } while (0)
+#endif
+#if !defined(SN32_SERIAL_RXDROP_HOOK)
+#define SN32_SERIAL_RXDROP_HOOK(sdp) do { } while (0)
+#endif
+
 static void serve_interrupt(SerialDriver *sdp) {
   #define UART_LS_STATUS (UART_LineStatus_OE | UART_LineStatus_PE | UART_LineStatus_FE | UART_LineStatus_BI | UART_LineStatus_RxError)
   sn32_uart_t *u = sdp->uart;
@@ -280,6 +293,7 @@ static void serve_interrupt(SerialDriver *sdp) {
 
   while ((ii & UART_Interrupt_Status) == UART_Interrupt_Pending) {
     uint32_t ls = u->LS;
+    if (ls & UART_LineStatus_OE) SN32_SERIAL_OE_HOOK(sdp, 0);
     if (ls & UART_LineStatus_BI) {
       set_error(sdp,UART_LineStatus_BI);
       u-> IE &= ~(UART_ReceiveLine);
@@ -296,10 +310,13 @@ static void serve_interrupt(SerialDriver *sdp) {
         chnAddFlagsI(sdp, CHN_INPUT_AVAILABLE);
       osalSysUnlockFromISR();
       osalSysLockFromISR();
-      if (iqPutI(&sdp->iqueue, u->RB) < MSG_OK)
+      if (iqPutI(&sdp->iqueue, u->RB) < MSG_OK) {
         chnAddFlagsI(sdp, SD_OVERRUN_ERROR);
+        SN32_SERIAL_RXDROP_HOOK(sdp);
+      }
       osalSysUnlockFromISR();
       ls = u->LS;
+      if (ls & UART_LineStatus_OE) SN32_SERIAL_OE_HOOK(sdp, 1);
       }
     uint32_t ie = u->IE;
 
