@@ -65,6 +65,20 @@
 #if !defined(SW_I2C_MASK_END)
 #  define SW_I2C_MASK_END() do { } while (0)
 #endif
+/* A board may run the whole transfer without the system lock: entered with
+   HAL's lock held, SW_I2C_XFER_BEGIN() makes whatever else must not run safe
+   and unlocks; SW_I2C_XFER_END() relocks and undoes it, before HAL's state
+   update. SW_I2C_INJECT_STUCK(), a test hook: true makes the clock waits see
+   SCL held low, so the transfer runs into its deadline. */
+#if !defined(SW_I2C_XFER_BEGIN)
+#  define SW_I2C_XFER_BEGIN() do { } while (0)
+#endif
+#if !defined(SW_I2C_XFER_END)
+#  define SW_I2C_XFER_END() do { } while (0)
+#endif
+#if !defined(SW_I2C_INJECT_STUCK)
+#  define SW_I2C_INJECT_STUCK() FALSE
+#endif
 
 /*===========================================================================*/
 /* Driver constants.                                                         */
@@ -136,7 +150,7 @@ static inline msg_t i2c_check_timeout(I2CDriver *i2cp) {
 static msg_t i2c_wait_clock(I2CDriver *i2cp) {
   i2c_delay(i2cp);
 
-  while (palReadLine(i2cp->config->scl) == PAL_LOW) {
+  while (palReadLine(i2cp->config->scl) == PAL_LOW || SW_I2C_INJECT_STUCK()) {
     if ((i2cp->start != i2cp->end) &&
         (!osalTimeIsInRangeX(osalOsGetSystemTimeX(), i2cp->start, i2cp->end))) {
       return MSG_TIMEOUT;
@@ -527,7 +541,9 @@ msg_t i2c_lld_master_receive_timeout(I2CDriver *i2cp, i2caddr_t addr,
   msg_t msg;
 
   SW_I2C_MASK_BEGIN();
+  SW_I2C_XFER_BEGIN();
   msg = master_receive(i2cp, addr, rxbuf, rxbytes, timeout);
+  SW_I2C_XFER_END();
   SW_I2C_MASK_END();
   return msg;
 }
@@ -539,7 +555,9 @@ msg_t i2c_lld_master_transmit_timeout(I2CDriver *i2cp, i2caddr_t addr,
   msg_t msg;
 
   SW_I2C_MASK_BEGIN();
+  SW_I2C_XFER_BEGIN();
   msg = master_transmit(i2cp, addr, txbuf, txbytes, rxbuf, rxbytes, timeout);
+  SW_I2C_XFER_END();
   SW_I2C_MASK_END();
   return msg;
 }

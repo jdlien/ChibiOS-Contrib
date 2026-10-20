@@ -285,6 +285,13 @@ static void set_error(SerialDriver *sdp, uint8_t ls) {
 #if !defined(SN32_SERIAL_RXDROP_HOOK)
 #define SN32_SERIAL_RXDROP_HOOK(sdp) do { } while (0)
 #endif
+/* And the handler's whole occupancy: entry and exit. */
+#if !defined(SN32_SERIAL_IRQ_ENTER_HOOK)
+#define SN32_SERIAL_IRQ_ENTER_HOOK() do { } while (0)
+#endif
+#if !defined(SN32_SERIAL_IRQ_EXIT_HOOK)
+#define SN32_SERIAL_IRQ_EXIT_HOOK() do { } while (0)
+#endif
 
 static void serve_interrupt(SerialDriver *sdp) {
   #define UART_LS_STATUS (UART_LineStatus_OE | UART_LineStatus_PE | UART_LineStatus_FE | UART_LineStatus_BI | UART_LineStatus_RxError)
@@ -457,9 +464,11 @@ OSAL_IRQ_HANDLER(SN32_UART1_HANDLER) {
 OSAL_IRQ_HANDLER(SN32_UART2_HANDLER) {
 
   OSAL_IRQ_PROLOGUE();
+  SN32_SERIAL_IRQ_ENTER_HOOK();
 
   serve_interrupt(&SD2);
 
+  SN32_SERIAL_IRQ_EXIT_HOOK();
   OSAL_IRQ_EPILOGUE();
 }
 #endif
