@@ -103,6 +103,19 @@ static inline void spi_fifo_fill(SPIDriver *spip) {
 }
 
 static inline void spi_lld_irq_handler(SPIDriver *spip) {
+  /* The FIFO dispatch respects IE and ownership (ak820pro). With RXFIFOTHIE
+     off, a board's polled send owns the FIFO (lcd_bus.c's spi0_poll_send):
+     its bytes aren't the driver's to take. With no transfer active, there is
+     no completion to run: anything in RX is drained (the threshold is 0, so a
+     non-empty FIFO would keep its flag up and re-enter forever) and the flag
+     cleared, and the idle driver is left alone. */
+  if (!(spip->spi->IE & (1u << 2))) return;   /* RXFIFOTHIE */
+  if (spip->state != SPI_ACTIVE) {
+    for (uint32_t d = 0; d < 2U * SN32_SPI_FIFO_DEPTH && !spip->spi->STAT_b.RX_EMPTY; d++)
+      (void)spip->spi->DATA;
+    spip->spi->IC = 1u << 2;                   /* RXFIFOTHIC, a literal write */
+    return;
+  }
   if (spip->spi->RIS_b.RXFIFOTHIF || !spip->spi->STAT_b.RX_EMPTY) {
     /* Drain every word the RX FIFO accumulated since the last interrupt. */
     while (!spip->spi->STAT_b.RX_EMPTY) {
